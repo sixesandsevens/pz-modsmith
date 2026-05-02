@@ -118,6 +118,7 @@ INDEX_HTML = r"""
     .finding-body .evidence { font-family: monospace; background: #0b1018; border-radius: 6px; padding: 4px 8px; font-size: .82rem; overflow-wrap: anywhere; color: var(--muted); margin: 4px 0; }
     .finding-body .recommendation { color: var(--text); margin-top: 6px; }
     .finding-body .scan-result { color: var(--good); }
+    .dependency-line { margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -207,6 +208,13 @@ INDEX_HTML = r"""
                   {% if 'has-requires' in mod.flags %}
                     <span class="pill warn">declares requires</span>
                   {% endif %}
+                  {% for dep in mod.dependency_findings %}
+                    {% if dep.status == 'missing' %}
+                      <span class="pill danger">missing dependency: {{ dep.required_mod_id }}</span>
+                    {% elif dep.status == 'present_unselected' %}
+                      <span class="pill warn">unselected dependency: {{ dep.required_mod_id }}</span>
+                    {% endif %}
+                  {% endfor %}
                 {% endfor %}
               </div>
               <a class="button secondary tiny" target="_blank" href="https://steamcommunity.com/sharedfiles/filedetails/?id={{ item.workshop_id }}">Steam page</a>
@@ -234,6 +242,17 @@ INDEX_HTML = r"""
                     {% if mod.requires_raw %}
                       <div class="path">Declares requires: {{ mod.requires_raw | join(', ') }}</div>
                     {% endif %}
+                    {% for dep in mod.dependency_findings %}
+                      <div class="path dependency-line">
+                        <span class="pill {% if dep.status == 'selected' %}good{% elif dep.status == 'present_unselected' %}warn{% elif dep.status == 'missing' %}danger{% endif %}">
+                          {{ dep.status }}
+                        </span>
+                        Requires {{ dep.required_mod_id }} — {{ dep.message }}
+                        {% if dep.provider_workshop_ids %}
+                          Provider Workshop: {{ dep.provider_workshop_ids | join(', ') }}
+                        {% endif %}
+                      </div>
+                    {% endfor %}
                   </label>
                 {% endfor %}
               {% endif %}

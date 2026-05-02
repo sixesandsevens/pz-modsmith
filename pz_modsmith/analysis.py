@@ -2,10 +2,91 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import AnalysisResult, DiagnosticFinding, ModInfo, WorkshopItem
+from .models import AnalysisResult, DependencyFinding, DiagnosticFinding, ModInfo, WorkshopItem
 from .utils import dedupe_keep_order
 from .scanner import scan_workshop_item, choose_best_guess
 from .diagnostics import extract_diagnostic_findings, enrich_findings
+
+
+def _normalize_mod_id(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _with_dependency_findings(
+    mod: ModInfo,
+    dependency_findings: list[DependencyFinding],
+) -> ModInfo:
+    return ModInfo(
+        workshop_id=mod.workshop_id,
+        mod_id=mod.mod_id,
+        name=mod.name,
+        path=mod.path,
+        score=mod.score,
+        notes=mod.notes,
+        confirmed_from_log=mod.confirmed_from_log,
+        description=mod.description,
+        poster=mod.poster,
+        url=mod.url,
+        requires_raw=mod.requires_raw,
+        flags=mod.flags,
+        dependency_findings=dependency_findings,
+    )
+
+
+def analyze_dependencies(items: list[WorkshopItem]) -> None:
+    mod_id_to_workshop_ids: dict[str, list[str]] = {}
+    mod_id_to_mod_ids: dict[str, list[str]] = {}
+    selected_mod_ids: set[str] = set()
+
+    for item in items:
+        if item.selected_mod_id:
+            selected_mod_ids.add(_normalize_mod_id(item.selected_mod_id))
+        for mod in item.mods:
+            key = _normalize_mod_id(mod.mod_id)
+            if not key:
+                continue
+            mod_id_to_workshop_ids.setdefault(key, [])
+            mod_id_to_mod_ids.setdefault(key, [])
+            if mod.workshop_id not in mod_id_to_workshop_ids[key]:
+                mod_id_to_workshop_ids[key].append(mod.workshop_id)
+            if mod.mod_id not in mod_id_to_mod_ids[key]:
+                mod_id_to_mod_ids[key].append(mod.mod_id)
+
+    for item in items:
+        updated_mods: list[ModInfo] = []
+        for mod in item.mods:
+            findings: list[DependencyFinding] = []
+            for raw_required in mod.requires_raw:
+                required_mod_id = " ".join(raw_required.split())
+                required_key = _normalize_mod_id(required_mod_id)
+                if not required_key:
+                    continue
+
+                provider_workshop_ids = mod_id_to_workshop_ids.get(required_key, [])
+                provider_mod_ids = mod_id_to_mod_ids.get(required_key, [])
+
+                if required_key in selected_mod_ids:
+                    status = "selected"
+                    message = "Dependency is selected."
+                elif provider_workshop_ids:
+                    status = "present_unselected"
+                    message = "Dependency exists locally but is not selected."
+                else:
+                    status = "missing"
+                    message = "Dependency was not found in scanned Workshop downloads."
+
+                findings.append(
+                    DependencyFinding(
+                        required_mod_id=required_mod_id,
+                        status=status,
+                        provider_workshop_ids=provider_workshop_ids,
+                        provider_mod_ids=provider_mod_ids,
+                        message=message,
+                    )
+                )
+
+            updated_mods.append(_with_dependency_findings(mod, findings))
+        item.mods = updated_mods
 
 
 def analyze(
@@ -39,6 +120,7 @@ def analyze(
                         url=mod.url,
                         requires_raw=mod.requires_raw,
                         flags=mod.flags,
+                        dependency_findings=mod.dependency_findings,
                     )
                 )
             mods = boosted_mods
@@ -93,6 +175,8 @@ def analyze(
             )
         )
 
+    analyze_dependencies(items)
+
     diagnostics: list[DiagnosticFinding] = []
     if console_text:
         diagnostics = extract_diagnostic_findings(console_text)
@@ -113,4 +197,5 @@ def apply_selection(result: AnalysisResult, selected: dict[str, str]) -> Analysi
         if item.workshop_id in selected:
             value = selected[item.workshop_id].strip()
             item.selected_mod_id = value or None
+    analyze_dependencies(result.items)
     return result

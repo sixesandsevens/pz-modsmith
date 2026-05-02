@@ -151,6 +151,9 @@ CLI mode writes reports to ./pzmodsmith-output by default:
     Items with warning patterns such as B41, single-player, legacy, no-MP,
     optional, patch, compatibility, addon, deprecated, or do-not-activate text.
 
+  dependency_warnings.txt
+    Required Mod IDs that are missing or present locally but not selected.
+
   missing_workshop_items.txt
     Workshop IDs that were not found locally or had no readable mod.info.
 
@@ -251,4 +254,3 @@ Project Layout
 
   pz_modsmith/models.py
     Dataclasses for analysis results, Workshop items, mods, and findings.
-

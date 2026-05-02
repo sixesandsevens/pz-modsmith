@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from .models import AnalysisResult, DiagnosticFinding, ModInfo, WorkshopItem
+from .models import AnalysisResult, DependencyFinding, DiagnosticFinding, ModInfo, WorkshopItem
 
 
 def result_to_dict(result: AnalysisResult) -> dict:
@@ -24,7 +24,21 @@ def result_to_dict(result: AnalysisResult) -> dict:
 def dict_to_result(data: dict) -> AnalysisResult:
     items: list[WorkshopItem] = []
     for raw_item in data["items"]:
-        mods = [ModInfo(**raw_mod) for raw_mod in raw_item.get("mods", [])]
+        mods: list[ModInfo] = []
+        for raw_mod in raw_item.get("mods", []):
+            dependency_findings = [
+                DependencyFinding(
+                    required_mod_id=d.get("required_mod_id", ""),
+                    status=d.get("status", ""),
+                    provider_workshop_ids=d.get("provider_workshop_ids", []),
+                    provider_mod_ids=d.get("provider_mod_ids", []),
+                    message=d.get("message", ""),
+                )
+                for d in (raw_mod.get("dependency_findings") or [])
+            ]
+            mod_data = dict(raw_mod)
+            mod_data["dependency_findings"] = dependency_findings
+            mods.append(ModInfo(**mod_data))
         items.append(
             WorkshopItem(
                 workshop_id=raw_item["workshop_id"],

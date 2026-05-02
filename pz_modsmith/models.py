@@ -4,6 +4,15 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class DependencyFinding:
+    required_mod_id: str
+    status: str
+    provider_workshop_ids: list[str] = field(default_factory=list)
+    provider_mod_ids: list[str] = field(default_factory=list)
+    message: str = ""
+
+
+@dataclass(frozen=True)
 class ModInfo:
     workshop_id: str
     mod_id: str
@@ -17,6 +26,7 @@ class ModInfo:
     url: str = ""
     requires_raw: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    dependency_findings: list[DependencyFinding] = field(default_factory=list)
 
 
 @dataclass

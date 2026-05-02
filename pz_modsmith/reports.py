@@ -9,6 +9,9 @@ from .models import AnalysisResult, ModInfo
 from .serialization import result_to_dict
 
 
+DEPENDENCY_WARNING_STATUSES = {"present_unselected", "missing"}
+
+
 def format_mod_report_line(mod: ModInfo, selected: bool = False) -> str:
     marker = "SELECTED" if selected else "        "
     notes = ", ".join(mod.notes) if mod.notes else "no obvious flags"
@@ -21,6 +24,7 @@ def format_mod_report_line(mod: ModInfo, selected: bool = False) -> str:
 
 def write_reports(result: AnalysisResult, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    dependency_warning_count = 0
 
     (out_dir / "workshop_ids.txt").write_text("\n".join(result.workshop_ids) + "\n", encoding="utf-8")
     (out_dir / "draft_server_lines.ini").write_text(
@@ -36,6 +40,7 @@ def write_reports(result: AnalysisResult, out_dir: Path) -> None:
     multi_lines = ["Multi-Mod Workshop Items Needing Review\n=======================================\n\n"]
     warning_lines = ["Warnings / Bad Smells\n====================\n\n"]
     missing_lines = ["Missing Workshop Downloads / mod.info\n=====================================\n\n"]
+    dependency_lines = ["Dependency Warnings\n===================\n\n"]
 
     for item in result.items:
         if item.status == "single":
@@ -53,15 +58,38 @@ def write_reports(result: AnalysisResult, out_dir: Path) -> None:
             if any(note.startswith("-") for note in mod.notes):
                 warning_lines.append(format_mod_report_line(mod, selected=(mod.mod_id == item.selected_mod_id)) + "\n\n")
 
+            for finding in mod.dependency_findings:
+                if finding.status not in DEPENDENCY_WARNING_STATUSES:
+                    continue
+                dependency_warning_count += 1
+                providers = ", ".join(finding.provider_workshop_ids) if finding.provider_workshop_ids else "None"
+                provider_mods = ", ".join(finding.provider_mod_ids) if finding.provider_mod_ids else "None"
+                dependency_lines.append(
+                    f"Workshop ID: {mod.workshop_id}\n"
+                    f"Mod ID: {mod.mod_id}\n"
+                    f"Required Mod ID: {finding.required_mod_id}\n"
+                    f"Status: {finding.status}\n"
+                    f"Provider Workshop IDs: {providers}\n"
+                    f"Provider Mod IDs: {provider_mods}\n"
+                    f"Message: {finding.message}\n\n"
+                )
+                warning_lines.append(
+                    f"DEPENDENCY | {mod.workshop_id} | {mod.mod_id} requires "
+                    f"{finding.required_mod_id} | {finding.status} | {finding.message}\n\n"
+                )
+
     if result.missing_count == 0:
         missing_lines.append("None.\n")
     if len(warning_lines) == 1:
         warning_lines.append("No obvious warning patterns found. Which is suspiciously polite for Zomboid.\n")
+    if dependency_warning_count == 0:
+        dependency_lines.append("None.\n")
 
     (out_dir / "single_mod_items.txt").write_text("".join(single_lines), encoding="utf-8")
     (out_dir / "review_multi_mod_items.txt").write_text("".join(multi_lines), encoding="utf-8")
     (out_dir / "warnings_bad_smells.txt").write_text("".join(warning_lines), encoding="utf-8")
     (out_dir / "missing_workshop_items.txt").write_text("".join(missing_lines), encoding="utf-8")
+    (out_dir / "dependency_warnings.txt").write_text("".join(dependency_lines), encoding="utf-8")
 
     if result.diagnostics:
         diag_lines = ["Connection Failure Diagnosis\n============================\n\n"]
@@ -86,6 +114,7 @@ def write_reports(result: AnalysisResult, out_dir: Path) -> None:
         f"Single-Mod Workshop items: {result.single_count}\n"
         f"Multi-Mod Workshop items needing review: {result.multi_count}\n"
         f"Missing Workshop folders/mod.info: {result.missing_count}\n"
+        f"Dependency warnings: {dependency_warning_count}\n"
         f"Diagnostic findings: {len(result.diagnostics)}\n"
         f"Workshop path: {result.workshop_path}\n"
     )
