@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import secrets
+import socket
 import tempfile
+import threading
+import webbrowser
 
 from .constants import APP_NAME, DEFAULT_PORT
 from .utils import expand_path, detect_default_workshop_path
@@ -330,6 +333,37 @@ async function copyText(id) {
 </body>
 </html>
 """
+
+
+def find_available_port(host: str, start_port: int) -> int:
+    port = start_port
+    while port <= 65535:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+            except OSError:
+                port += 1
+                continue
+            return port
+    raise SystemExit(f"No available port found at or above {start_port}.")
+
+
+def browser_url_for_host(host: str, port: int) -> str:
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    return f"http://{browser_host}:{port}"
+
+
+def open_browser(url: str) -> None:
+    threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+
+
+def run_app(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
+    available_port = find_available_port(host, port)
+    url = browser_url_for_host(host, available_port)
+    print(f"Opening {url}")
+    open_browser(url)
+    run_web(host, available_port)
 
 
 def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:

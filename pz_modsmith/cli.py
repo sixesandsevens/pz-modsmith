@@ -13,7 +13,7 @@ from .log_parser import (
 from .analysis import analyze, apply_selection
 from .models import AnalysisResult
 from .reports import write_reports
-from .web import run_web
+from .web import run_app, run_web
 
 
 def make_cli_result(args: argparse.Namespace) -> AnalysisResult:
@@ -42,6 +42,7 @@ def make_cli_result(args: argparse.Namespace) -> AnalysisResult:
 def main() -> None:
     parser = argparse.ArgumentParser(description="PZ Modsmith - Project Zomboid server mod-list helper")
     parser.add_argument("--web", action="store_true", help="Launch local web UI")
+    parser.add_argument("--app", action="store_true", help="Launch local app-style web UI and open a browser")
     parser.add_argument("--host", default="127.0.0.1", help="Web UI bind host")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Web UI port")
 
@@ -63,8 +64,12 @@ def main() -> None:
         run_web(args.host, args.port)
         return
 
+    if args.app:
+        run_app(args.host, args.port)
+        return
+
     if not args.console and not args.ids_file:
-        parser.error("CLI mode requires --console or --ids-file. Or use --web.")
+        parser.error("CLI mode requires --console or --ids-file. Or use --web or --app.")
 
     result = make_cli_result(args)
     write_reports(result, expand_path(args.out))
