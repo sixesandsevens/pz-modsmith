@@ -190,7 +190,7 @@ def enrich_findings(
     items: list[WorkshopItem],
 ) -> None:
     """Run local file scans for dictionary/script findings and update scan_result + recommendation."""
-    selected_ws_ids = {item.workshop_id for item in items if item.selected_mod_id}
+    selected_ws_ids = {item.workshop_id for item in items if item.selected_mod_ids}
     ws_to_mod_ids: dict[str, list[str]] = {
         item.workshop_id: [m.mod_id for m in item.mods] for item in items
     }

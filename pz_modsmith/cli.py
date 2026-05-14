@@ -14,6 +14,7 @@ from .analysis import analyze, apply_selection
 from .models import AnalysisResult
 from .reports import write_reports
 from .web import run_app, run_web
+from .steam_api import expand_workshop_ids_with_required_items
 
 
 def make_cli_result(args: argparse.Namespace) -> AnalysisResult:
@@ -34,9 +35,22 @@ def make_cli_result(args: argparse.Namespace) -> AnalysisResult:
         raise SystemExit("Expected --console or --ids-file")
 
     if not workshop_ids:
-        raise SystemExit("No Workshop IDs found.")
+        if not active_mod_ids:
+            raise SystemExit("No Workshop IDs found.")
 
-    return analyze(workshop_ids, workshop_path, active_mod_ids, console_text=console_text)
+    if getattr(args, "fetch_steam_deps", False) and workshop_ids:
+        workshop_ids = expand_workshop_ids_with_required_items(
+            workshop_ids,
+            max_depth=getattr(args, "deps_depth", 2),
+        )
+
+    return analyze(
+        workshop_ids,
+        workshop_path,
+        active_mod_ids,
+        console_text=console_text,
+        prefer_highest_version=getattr(args, "prefer_highest_version", False),
+    )
 
 
 def main() -> None:
@@ -57,6 +71,23 @@ def main() -> None:
         help="Path to Steam workshop content/108600 folder",
     )
     parser.add_argument("--out", type=Path, default=Path("./pzmodsmith-output"), help="CLI output folder")
+    parser.add_argument(
+        "--fetch-steam-deps",
+        dest="fetch_steam_deps",
+        action="store_true",
+        help='Fetch Steam Workshop "required items" (online) and include them',
+    )
+    parser.add_argument(
+        "--deps-depth",
+        type=int,
+        default=2,
+        help="Dependency expansion depth when using --fetch-steam-deps",
+    )
+    parser.add_argument(
+        "--prefer-highest-version",
+        action="store_true",
+        help="When the same Mod ID has multiple variants, keep the highest version",
+    )
 
     args = parser.parse_args()
 

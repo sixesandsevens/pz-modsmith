@@ -43,7 +43,10 @@ def dict_to_result(data: dict) -> AnalysisResult:
             WorkshopItem(
                 workshop_id=raw_item["workshop_id"],
                 mods=mods,
-                selected_mod_id=raw_item.get("selected_mod_id"),
+                selected_mod_ids=(
+                    raw_item.get("selected_mod_ids")
+                    or ([raw_item["selected_mod_id"]] if raw_item.get("selected_mod_id") else [])
+                ),
                 status=raw_item["status"],
                 needs_review=raw_item.get("needs_review", False),
             )

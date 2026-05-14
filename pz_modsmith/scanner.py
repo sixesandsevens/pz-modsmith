@@ -55,6 +55,53 @@ _VARIANT_SP_RE = re.compile(r"(?<!\w)SP(?!\w)|singleplayer|single[\s_]player", r
 _VARIANT_MP_RE = re.compile(r"(?<!\w)MP(?!\w)|multiplayer", re.IGNORECASE)
 _VARIANT_LEGACY_RE = re.compile(r"\blegacy\b|\bdeprecated\b|pre[\s_-]?42|pre[\s_-]?mp", re.IGNORECASE)
 
+_VERSION_IN_PATH_RE = re.compile(r"(?<!\d)(\d{1,3})\.(\d{1,3})(?:\.(\d{1,3}))?(?!\d)")
+
+
+def _parse_version_tuple(value: str) -> tuple[int, int, int] | None:
+    m = _VERSION_IN_PATH_RE.search(value)
+    if not m:
+        return None
+    major = int(m.group(1))
+    minor = int(m.group(2))
+    patch = int(m.group(3) or 0)
+    return (major, minor, patch)
+
+
+def collapse_to_highest_version(mods: list[ModInfo]) -> list[ModInfo]:
+    """Collapse multiple mod.info variants per Mod ID to the highest version.
+
+    Workshop items often ship multiple versions of the same mod ID (e.g., 42.0, 42.15)
+    in different subfolders. In most server setups you want only the newest one.
+    """
+    if not mods:
+        return []
+
+    def key_for(mod: ModInfo) -> tuple:
+        # Prefer confirmed variants, then higher version (if present), then score.
+        # If no version is present, treat it as 0.0.0.
+        version = _parse_version_tuple(mod.path) or (0, 0, 0)
+        return (
+            1 if mod.confirmed_from_log else 0,
+            version,
+            mod.score,
+            -len(mod.path),
+        )
+
+    best_by_id: dict[str, ModInfo] = {}
+    for mod in mods:
+        mod_id_key = mod.mod_id.casefold()
+        if mod_id_key not in best_by_id or key_for(mod) > key_for(best_by_id[mod_id_key]):
+            best_by_id[mod_id_key] = mod
+
+    # Preserve stable ordering by original appearance of each mod_id.
+    ordered_keys = dedupe_keep_order(m.mod_id.casefold() for m in mods)
+    out: list[ModInfo] = []
+    for k in ordered_keys:
+        if k in best_by_id:
+            out.append(best_by_id[k])
+    return out
+
 
 def detect_smell_flags(mod_id: str, name: str, description: str, requires_raw: list[str]) -> list[str]:
     """Return semantic smell flags for a mod.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .utils import dedupe_keep_order
+
 
 @dataclass(frozen=True)
 class DependencyFinding:
@@ -33,9 +35,9 @@ class ModInfo:
 class WorkshopItem:
     workshop_id: str
     mods: list[ModInfo]
-    selected_mod_id: str | None
     status: str
     needs_review: bool
+    selected_mod_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -64,9 +66,10 @@ class AnalysisResult:
     def selected_mod_ids(self) -> list[str]:
         selected: list[str] = []
         for item in self.items:
-            if item.selected_mod_id:
-                selected.append(item.selected_mod_id)
-        return selected
+            for mod_id in item.selected_mod_ids:
+                if mod_id:
+                    selected.append(mod_id)
+        return dedupe_keep_order(m for m in selected if m)
 
     @property
     def workshop_line(self) -> str:

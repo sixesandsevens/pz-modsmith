@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .models import AnalysisResult, DependencyFinding, DiagnosticFinding, ModInfo, WorkshopItem
 from .utils import dedupe_keep_order
-from .scanner import scan_workshop_item, choose_best_guess
+from .scanner import scan_workshop_item, choose_best_guess, parse_mod_info_file, collapse_to_highest_version
 from .diagnostics import extract_diagnostic_findings, enrich_findings
 
 
@@ -39,8 +39,10 @@ def analyze_dependencies(items: list[WorkshopItem]) -> None:
     selected_mod_ids: set[str] = set()
 
     for item in items:
-        if item.selected_mod_id:
-            selected_mod_ids.add(_normalize_mod_id(item.selected_mod_id))
+        for selected in item.selected_mod_ids:
+            key = _normalize_mod_id(selected)
+            if key:
+                selected_mod_ids.add(key)
         for mod in item.mods:
             key = _normalize_mod_id(mod.mod_id)
             if not key:
@@ -94,14 +96,20 @@ def analyze(
     workshop_path: Path,
     active_mod_ids: list[str] | None = None,
     console_text: str = "",
+    prefer_highest_version: bool = False,
 ) -> AnalysisResult:
+    active_mod_ids = active_mod_ids or []
+    if not workshop_ids and active_mod_ids:
+        workshop_ids = infer_workshop_ids_from_active_mod_ids(workshop_path, active_mod_ids)
+
     items: list[WorkshopItem] = []
     missing_ids: list[str] = []
-    active_mod_ids = active_mod_ids or []
     active_mod_id_set = set(active_mod_ids)
 
     for workshop_id in workshop_ids:
         mods = scan_workshop_item(workshop_path, workshop_id)
+        if prefer_highest_version:
+            mods = collapse_to_highest_version(mods)
         if active_mod_id_set:
             boosted_mods: list[ModInfo] = []
             for mod in mods:
@@ -124,6 +132,8 @@ def analyze(
                     )
                 )
             mods = boosted_mods
+            if prefer_highest_version:
+                mods = collapse_to_highest_version(mods)
         unique_mod_ids = dedupe_keep_order(mod.mod_id for mod in mods)
         confirmed_unique_ids = dedupe_keep_order(mod.mod_id for mod in mods if mod.confirmed_from_log)
 
@@ -133,7 +143,7 @@ def analyze(
                 WorkshopItem(
                     workshop_id=workshop_id,
                     mods=[],
-                    selected_mod_id=None,
+                    selected_mod_ids=[],
                     status="missing",
                     needs_review=True,
                 )
@@ -145,19 +155,19 @@ def analyze(
                 WorkshopItem(
                     workshop_id=workshop_id,
                     mods=mods,
-                    selected_mod_id=unique_mod_ids[0],
+                    selected_mod_ids=[unique_mod_ids[0]],
                     status="single",
                     needs_review=False,
                 )
             )
             continue
 
-        if len(confirmed_unique_ids) == 1:
+        if confirmed_unique_ids:
             items.append(
                 WorkshopItem(
                     workshop_id=workshop_id,
                     mods=mods,
-                    selected_mod_id=confirmed_unique_ids[0],
+                    selected_mod_ids=list(confirmed_unique_ids),
                     status="multi",
                     needs_review=False,
                 )
@@ -169,7 +179,7 @@ def analyze(
             WorkshopItem(
                 workshop_id=workshop_id,
                 mods=mods,
-                selected_mod_id=best.mod_id if best else None,
+                selected_mod_ids=[best.mod_id] if best else [],
                 status="multi",
                 needs_review=True,
             )
@@ -192,10 +202,51 @@ def analyze(
     )
 
 
-def apply_selection(result: AnalysisResult, selected: dict[str, str]) -> AnalysisResult:
+def infer_workshop_ids_from_active_mod_ids(workshop_path: Path, active_mod_ids: list[str]) -> list[str]:
+    """Infer Workshop item IDs by scanning local downloads for active Mod IDs.
+
+    This is a fallback for console logs that include many active mod IDs but do
+    not include Workshop ID lines. It only uses local workshop content; no
+    network calls.
+    """
+    target_keys = {_normalize_mod_id(mid) for mid in active_mod_ids if _normalize_mod_id(mid)}
+    if not target_keys:
+        return []
+
+    found_workshop_ids: list[str] = []
+    found_keys: set[str] = set()
+
+    try:
+        children = list(workshop_path.iterdir())
+    except OSError:
+        return []
+
+    for item_dir in children:
+        if not item_dir.is_dir():
+            continue
+        workshop_id = item_dir.name
+        if not workshop_id.isdigit():
+            continue
+
+        for mod_info_path in item_dir.rglob("mod.info"):
+            info = parse_mod_info_file(mod_info_path, workshop_id)
+            if not info:
+                continue
+            key = _normalize_mod_id(info.mod_id)
+            if key in target_keys:
+                if workshop_id not in found_workshop_ids:
+                    found_workshop_ids.append(workshop_id)
+                found_keys.add(key)
+                if len(found_keys) >= len(target_keys):
+                    return found_workshop_ids
+
+    return found_workshop_ids
+
+
+def apply_selection(result: AnalysisResult, selected: dict[str, list[str]]) -> AnalysisResult:
     for item in result.items:
         if item.workshop_id in selected:
-            value = selected[item.workshop_id].strip()
-            item.selected_mod_id = value or None
+            values = [v.strip() for v in (selected[item.workshop_id] or []) if v and v.strip()]
+            item.selected_mod_ids = values
     analyze_dependencies(result.items)
     return result

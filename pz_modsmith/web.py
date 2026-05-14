@@ -18,6 +18,7 @@ from .log_parser import (
 from .analysis import analyze, apply_selection
 from .serialization import result_to_dict, dict_to_result
 from .reports import zip_reports
+from .steam_api import expand_workshop_ids_with_required_items
 
 
 INDEX_HTML = r"""
@@ -146,6 +147,18 @@ INDEX_HTML = r"""
       <label>Or paste console log / Workshop IDs / Steam URLs</label>
       <textarea name="pasted_text" placeholder="Paste ~/Zomboid/console.txt snippets, Workshop IDs, or Steam Workshop URLs here..."></textarea>
 
+      <label class="tiny" style="font-weight:700; margin-top: 10px;">
+        <input type="checkbox" name="fetch_steam_deps" value="1">
+        Fetch Steam "required items" (online) and include them
+      </label>
+      <p class="muted tiny">Optional. Uses Steam Web API to fetch Workshop dependencies; still requires the items to be downloaded locally to scan <code>mod.info</code>.</p>
+
+      <label class="tiny" style="font-weight:700; margin-top: 10px;">
+        <input type="checkbox" name="prefer_highest_version" value="1" checked>
+        Prefer highest version when the same Mod ID appears multiple times
+      </label>
+      <p class="muted tiny">Collapses multiple <code>mod.info</code> variants like <code>42.0</code>/<code>42.15</code> to the newest one.</p>
+
       <button type="submit">Analyze mods</button>
     </form>
   </section>
@@ -204,7 +217,7 @@ INDEX_HTML = r"""
                 {% if item.status == 'single' %}<span class="pill good">single</span>{% endif %}
                 {% if item.status == 'multi' %}<span class="pill warn">review</span>{% endif %}
                 {% if item.status == 'missing' %}<span class="pill danger">missing</span>{% endif %}
-                {% for mod in item.mods if mod.mod_id == item.selected_mod_id %}
+                {% for mod in item.mods if mod.mod_id in item.selected_mod_ids %}
                   {% if 'likely-library' in mod.flags or 'tiles' in mod.flags or 'vehicle-framework' in mod.flags %}
                     <span class="pill warn">&#9888; likely dependency — be careful removing</span>
                   {% endif %}
@@ -225,11 +238,10 @@ INDEX_HTML = r"""
             <div class="item-body">
               {% if not item.mods %}
                 <p class="muted">No downloaded mod.info found for this Workshop item.</p>
-                <input type="hidden" name="selected_{{ item.workshop_id }}" value="">
               {% else %}
                 {% for mod in item.mods %}
-                  <label class="mod-option {% if mod.mod_id == item.selected_mod_id %}selected{% endif %}">
-                    <input type="radio" name="selected_{{ item.workshop_id }}" value="{{ mod.mod_id }}" {% if mod.mod_id == item.selected_mod_id %}checked{% endif %}>
+                  <label class="mod-option {% if mod.mod_id in item.selected_mod_ids %}selected{% endif %}">
+                    <input type="checkbox" name="selected_{{ item.workshop_id }}" value="{{ mod.mod_id }}" {% if mod.mod_id in item.selected_mod_ids %}checked{% endif %}>
                     <span class="mod-title">{{ mod.mod_id }}</span> — {{ mod.name }}
                     <span class="pill {% if mod.score >= 2 %}good{% elif mod.score < 0 %}danger{% else %}warn{% endif %}">score {{ mod.score }}</span>
                     {% if mod.confirmed_from_log %}<span class="pill good">confirmed from log</span>{% endif %}
@@ -412,10 +424,26 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
             active_mod_ids = extract_active_mod_ids_from_console_text(text)
             if not workshop_ids:
                 workshop_ids = extract_workshop_ids_from_free_text(text)
-            if not workshop_ids:
-                raise ValueError("No Workshop IDs found in the provided text/file.")
+            if not workshop_ids and not active_mod_ids:
+                raise ValueError(
+                    "No Workshop IDs found (and no active Mod IDs to infer from) in the provided text/file."
+                )
 
-            result = analyze(workshop_ids, workshop_path, active_mod_ids, console_text=text)
+            if workshop_ids and request.form.get("fetch_steam_deps"):
+                try:
+                    workshop_ids = expand_workshop_ids_with_required_items(workshop_ids)
+                except Exception:
+                    # Treat Steam lookup as best-effort; local analysis still works.
+                    pass
+
+            prefer_highest_version = bool(request.form.get("prefer_highest_version"))
+            result = analyze(
+                workshop_ids,
+                workshop_path,
+                active_mod_ids,
+                console_text=text,
+                prefer_highest_version=prefer_highest_version,
+            )
             state_json = json.dumps(result_to_dict(result))
             return render_template_string(
                 INDEX_HTML,
@@ -437,9 +465,9 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
     def generate_route():
         state = json.loads(request.form["state"])
         result = dict_to_result(state)
-        selected: dict[str, str] = {}
+        selected: dict[str, list[str]] = {}
         for item in result.items:
-            selected[item.workshop_id] = request.form.get(f"selected_{item.workshop_id}", "")
+            selected[item.workshop_id] = [v for v in request.form.getlist(f"selected_{item.workshop_id}") if v.strip()]
         apply_selection(result, selected)
         state_json = json.dumps(result_to_dict(result))
         return render_template_string(RESULT_HTML, result=result, state_json=state_json)

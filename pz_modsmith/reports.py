@@ -49,14 +49,18 @@ def write_reports(result: AnalysisResult, out_dir: Path) -> None:
         elif item.status == "multi":
             multi_lines.append(f"===== Workshop ID: {item.workshop_id} =====\n")
             for mod in item.mods:
-                multi_lines.append(format_mod_report_line(mod, selected=(mod.mod_id == item.selected_mod_id)) + "\n")
+                multi_lines.append(
+                    format_mod_report_line(mod, selected=(mod.mod_id in item.selected_mod_ids)) + "\n"
+                )
             multi_lines.append("\n")
         elif item.status == "missing":
             missing_lines.append(f"{item.workshop_id}\n")
 
         for mod in item.mods:
             if any(note.startswith("-") for note in mod.notes):
-                warning_lines.append(format_mod_report_line(mod, selected=(mod.mod_id == item.selected_mod_id)) + "\n\n")
+                warning_lines.append(
+                    format_mod_report_line(mod, selected=(mod.mod_id in item.selected_mod_ids)) + "\n\n"
+                )
 
             for finding in mod.dependency_findings:
                 if finding.status not in DEPENDENCY_WARNING_STATUSES:
