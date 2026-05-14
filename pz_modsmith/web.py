@@ -6,6 +6,7 @@ import socket
 import tempfile
 import threading
 import webbrowser
+from importlib import resources as importlib_resources
 
 from .constants import APP_NAME, DEFAULT_PORT
 from .utils import expand_path, detect_default_workshop_path
@@ -19,6 +20,8 @@ from .analysis import analyze, apply_selection
 from .serialization import result_to_dict, dict_to_result
 from .reports import zip_reports
 from .steam_api import expand_workshop_ids_with_required_items
+from .server_ini import parse_pzserver_ini, apply_pzserver_ini_edits
+from .sandbox_lua import parse_sandbox_vars_lua, apply_sandbox_vars_edits
 
 
 INDEX_HTML = r"""
@@ -129,6 +132,11 @@ INDEX_HTML = r"""
 <header>
   <h1>PZ Modsmith</h1>
   <p class="subtitle">A local Project Zomboid server mod-list helper. Feed it a console log or Workshop IDs, review the messy multi-ID mods, then copy clean <code>WorkshopItems=</code> and <code>Mods=</code> lines.</p>
+  <div class="toolbar">
+    <a class="button secondary tiny" href="/">Mods</a>
+    <a class="button secondary tiny" href="/server">Server Settings</a>
+    <a class="button secondary tiny" href="/sandbox">SandboxVars</a>
+  </div>
 </header>
 <main>
   {% if error %}
@@ -136,6 +144,10 @@ INDEX_HTML = r"""
   {% endif %}
 
   <section class="card">
+    <div class="toolbar">
+      <a class="button secondary" href="/server/template">Load `pzserver.ini` template</a>
+      <a class="button secondary" href="/sandbox/template">Load `pzserver_SandboxVars.lua` template</a>
+    </div>
     <form method="post" action="/analyze" enctype="multipart/form-data">
       <label>Workshop content path</label>
       <input type="text" name="workshop_path" value="{{ workshop_path }}">
@@ -294,6 +306,261 @@ function filterItems(status) {
 </html>
 """
 
+SERVER_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PZ Modsmith - Server Settings</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #10141c; color: #e8edf7; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 24px 64px; }
+    .card { background: #171d29; border: 1px solid #324057; border-radius: 18px; padding: 20px; margin: 18px 0; }
+    .muted { color: #aeb8ca; }
+    button, .button { border: 0; background: #7aa2ff; color: #07101f; font-weight: 800; border-radius: 12px; padding: 12px 16px; cursor: pointer; text-decoration: none; display: inline-flex; margin: 6px 6px 6px 0; }
+    .secondary { background: #202839; color: #e8edf7; border: 1px solid #324057; }
+    input[type="file"], textarea { width: 100%; background: #0d121a; color: #e8edf7; border: 1px solid #324057; border-radius: 12px; padding: 12px 14px; font: inherit; }
+    textarea { min-height: 170px; resize: vertical; }
+    .setting { border: 1px solid #324057; border-radius: 14px; padding: 12px 14px; margin: 10px 0; background: rgba(0,0,0,.2); }
+    .setting.changed { outline: 2px solid #ffc66d; }
+    .setting-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+    .pill { display: inline-flex; border-radius: 999px; padding: 3px 9px; font-size: .8rem; font-weight: 800; border: 1px solid #324057; color: #aeb8ca; }
+    code { background: #0b1018; color: #d8e2f4; border: 1px solid #324057; border-radius: 10px; padding: 2px 6px; }
+    .k { font-weight: 900; }
+    .v { color: #d8e2f4; }
+    select, input[type="text"] { width: 100%; background: #0d121a; color: #e8edf7; border: 1px solid #324057; border-radius: 12px; padding: 12px 14px; font: inherit; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Server Settings</h1>
+  <p class="muted">Editor for <code>pzserver.ini</code>. Saves as a downloadable file (does not overwrite your server automatically).</p>
+
+  {% if error %}
+    <section class="card"><strong>Error:</strong> {{ error }}</section>
+  {% endif %}
+
+  <section class="card">
+    <form method="post" action="/server" enctype="multipart/form-data">
+      <label class="k">Upload <code>pzserver.ini</code></label>
+      <input type="file" name="server_ini_file" accept=".ini,.txt">
+
+      <div style="margin-top: 12px;" class="muted">Or paste contents</div>
+      <textarea name="server_ini_text" placeholder="Paste pzserver.ini here...">{{ server_ini_text or '' }}</textarea>
+
+      <button type="submit">Parse settings</button>
+      <a class="button secondary" href="/server/template">Load example template</a>
+      <a class="button secondary" href="/">Back to Mods</a>
+    </form>
+  </section>
+
+  {% if settings %}
+    <section class="card">
+      <form method="post" action="/server/save">
+        <input type="hidden" name="server_ini_text" value="{{ server_ini_text }}">
+        {% for s in settings %}
+          <input type="hidden" name="key" value="{{ s.key }}">
+          <input type="hidden" name="val_{{ s.key }}" value="{{ s.value }}">
+        {% endfor %}
+        <button type="submit">Save edited INI</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Parsed Settings ({{ settings|length }})</h2>
+      <form method="post" action="/server/save">
+        <input type="hidden" name="server_ini_text" value="{{ server_ini_text }}">
+        {% for s in settings %}
+          <div class="setting" data-default="{{ (loaded_defaults.get(s.key, '') if loaded_defaults else '') }}">
+            <div class="setting-head">
+              <span class="k">{{ s.key }}</span>
+              <span class="pill">{{ s.value_type }}</span>
+              {% if s.min_value is not none %}<span class="pill">min {{ s.min_value }}</span>{% endif %}
+              {% if s.max_value is not none %}<span class="pill">max {{ s.max_value }}</span>{% endif %}
+              {% if loaded_defaults and loaded_defaults.get(s.key) is not none %}<span class="pill">loaded {{ loaded_defaults.get(s.key) }}</span>{% endif %}
+              {% if s.default %}<span class="pill">game default {{ s.default }}</span>{% endif %}
+            </div>
+            <div style="margin-top:8px;">
+              <input type="hidden" name="key" value="{{ s.key }}">
+              {% if s.value_type == 'bool' %}
+                <select name="val_{{ s.key }}">
+                  <option value="true" {% if s.value|lower == 'true' %}selected{% endif %}>true</option>
+                  <option value="false" {% if s.value|lower == 'false' %}selected{% endif %}>false</option>
+                </select>
+              {% elif s.value_type in ['int','float'] %}
+                <input type="text" name="val_{{ s.key }}" value="{{ s.value }}">
+              {% elif s.value_type in ['semicolon_list','comma_list'] or s.key in ['Mods','WorkshopItems','Map'] %}
+                <textarea name="val_{{ s.key }}">{{ s.value }}</textarea>
+              {% else %}
+                <input type="text" name="val_{{ s.key }}" value="{{ s.value }}">
+              {% endif %}
+            </div>
+            {% if s.comments %}
+              <div class="muted" style="margin-top:8px; line-height:1.5;">
+                {% for c in s.comments %}<div>{{ c }}</div>{% endfor %}
+              </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+        <button type="submit">Save edited INI</button>
+      </form>
+    </section>
+  {% endif %}
+</main>
+<script>
+function markChanged(root) {
+  const cards = root.querySelectorAll('.setting[data-default]');
+  cards.forEach(card => {
+    const def = (card.getAttribute('data-default') || '').trim();
+    if (!def) return;
+    const input = card.querySelector('input[name^="val_"], textarea[name^="val_"], select[name^="val_"]');
+    if (!input) return;
+    const current = (input.value || '').trim();
+    card.classList.toggle('changed', current !== def);
+    const pill = card.querySelector('.pill._changed');
+    if (pill) pill.remove();
+    if (current !== def) {
+      const p = document.createElement('span');
+      p.className = 'pill _changed';
+      p.textContent = 'changed';
+      const head = card.querySelector('.setting-head');
+      if (head) head.appendChild(p);
+    }
+  });
+}
+document.addEventListener('input', () => markChanged(document));
+document.addEventListener('change', () => markChanged(document));
+markChanged(document);
+</script>
+</body>
+</html>
+"""
+
+SANDBOX_HTML = r"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PZ Modsmith - SandboxVars</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #10141c; color: #e8edf7; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 24px 64px; }
+    .card { background: #171d29; border: 1px solid #324057; border-radius: 18px; padding: 20px; margin: 18px 0; }
+    .muted { color: #aeb8ca; }
+    button, .button { border: 0; background: #7aa2ff; color: #07101f; font-weight: 800; border-radius: 12px; padding: 12px 16px; cursor: pointer; text-decoration: none; display: inline-flex; margin: 6px 6px 6px 0; }
+    .secondary { background: #202839; color: #e8edf7; border: 1px solid #324057; }
+    input[type="file"], textarea, input[type="text"], select { width: 100%; background: #0d121a; color: #e8edf7; border: 1px solid #324057; border-radius: 12px; padding: 12px 14px; font: inherit; }
+    textarea { min-height: 170px; resize: vertical; }
+    .setting { border: 1px solid #324057; border-radius: 14px; padding: 12px 14px; margin: 10px 0; background: rgba(0,0,0,.2); }
+    .setting.changed { outline: 2px solid #ffc66d; }
+    .setting-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+    .pill { display: inline-flex; border-radius: 999px; padding: 3px 9px; font-size: .8rem; font-weight: 800; border: 1px solid #324057; color: #aeb8ca; }
+    code { background: #0b1018; color: #d8e2f4; border: 1px solid #324057; border-radius: 10px; padding: 2px 6px; }
+    .k { font-weight: 900; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SandboxVars</h1>
+  <p class="muted">Editor for <code>pzserver_SandboxVars.lua</code>. Saves as a downloadable file.</p>
+
+  {% if error %}
+    <section class="card"><strong>Error:</strong> {{ error }}</section>
+  {% endif %}
+
+  <section class="card">
+    <form method="post" action="/sandbox" enctype="multipart/form-data">
+      <label class="k">Upload <code>pzserver_SandboxVars.lua</code></label>
+      <input type="file" name="sandbox_file" accept=".lua,.txt">
+
+      <div style="margin-top: 12px;" class="muted">Or paste contents</div>
+      <textarea name="sandbox_text" placeholder="Paste pzserver_SandboxVars.lua here...">{{ sandbox_text or '' }}</textarea>
+
+      <button type="submit">Parse settings</button>
+      <a class="button secondary" href="/sandbox/template">Load example template</a>
+      <a class="button secondary" href="/server">Server Settings</a>
+      <a class="button secondary" href="/">Back to Mods</a>
+    </form>
+  </section>
+
+  {% if settings %}
+    <section class="card">
+      <h2>Parsed Settings ({{ settings|length }})</h2>
+      <form method="post" action="/sandbox/save">
+        <input type="hidden" name="sandbox_text" value="{{ sandbox_text }}">
+        {% for s in settings %}
+          <div class="setting" data-default="{{ (loaded_defaults.get(s.key, '') if loaded_defaults else '') }}">
+            <div class="setting-head">
+              <span class="k">{{ s.key }}</span>
+              <span class="pill">{{ s.value_type }}</span>
+              {% if s.options %}<span class="pill">{{ s.options|length }} options</span>{% endif %}
+              {% if loaded_defaults and loaded_defaults.get(s.key) is not none %}<span class="pill">loaded {{ loaded_defaults.get(s.key) }}</span>{% endif %}
+              {% if s.default_raw %}<span class="pill">game default {{ s.default_raw }}</span>{% endif %}
+            </div>
+            <div style="margin-top:8px;">
+              <input type="hidden" name="key" value="{{ s.key }}">
+              {% if s.options %}
+                <select name="val_{{ s.key }}">
+                  {% for opt in s.options %}
+                    <option value="{{ opt[0] }}" {% if (s.value_raw|string)|trim == (opt[0]|string) %}selected{% endif %}>{{ opt[0] }} - {{ opt[1] }}</option>
+                  {% endfor %}
+                </select>
+              {% elif s.value_type == 'bool' %}
+                <select name="val_{{ s.key }}">
+                  <option value="true" {% if s.value_raw == 'true' %}selected{% endif %}>true</option>
+                  <option value="false" {% if s.value_raw == 'false' %}selected{% endif %}>false</option>
+                </select>
+              {% elif s.value_type == 'int' %}
+                <input type="text" name="val_{{ s.key }}" value="{{ s.value_raw }}">
+              {% elif s.value_type == 'float' %}
+                <input type="text" name="val_{{ s.key }}" value="{{ s.value_raw }}">
+              {% else %}
+                <input type="text" name="val_{{ s.key }}" value="{{ s.value_raw }}">
+              {% endif %}
+            </div>
+            {% if s.comments %}
+              <div class="muted" style="margin-top:8px; line-height:1.5;">
+                {% for c in s.comments %}<div>{{ c }}</div>{% endfor %}
+              </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+        <button type="submit">Save edited SandboxVars</button>
+      </form>
+    </section>
+  {% endif %}
+</main>
+<script>
+function markChanged(root) {
+  const cards = root.querySelectorAll('.setting[data-default]');
+  cards.forEach(card => {
+    const def = (card.getAttribute('data-default') || '').trim();
+    if (!def) return;
+    const input = card.querySelector('input[name^="val_"], textarea[name^="val_"], select[name^="val_"]');
+    if (!input) return;
+    const current = (input.value || '').trim();
+    card.classList.toggle('changed', current !== def);
+    const pill = card.querySelector('.pill._changed');
+    if (pill) pill.remove();
+    if (current !== def) {
+      const p = document.createElement('span');
+      p.className = 'pill _changed';
+      p.textContent = 'changed';
+      const head = card.querySelector('.setting-head');
+      if (head) head.appendChild(p);
+    }
+  });
+}
+document.addEventListener('input', () => markChanged(document));
+document.addEventListener('change', () => markChanged(document));
+markChanged(document);
+</script>
+</body>
+</html>
+"""
+
 RESULT_HTML = r"""
 <!doctype html>
 <html lang="en">
@@ -401,6 +668,179 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
             error=None,
             state_json="",
         )
+
+    @app.get("/server")
+    def server_get():
+        return render_template_string(
+            SERVER_HTML,
+            settings=None,
+            error=None,
+            server_ini_text="",
+            loaded_defaults={},
+        )
+
+    @app.post("/server")
+    def server_post():
+        try:
+            pasted_text = request.form.get("server_ini_text", "") or ""
+            uploaded = request.files.get("server_ini_file")
+            text = pasted_text
+            if uploaded and uploaded.filename:
+                text = uploaded.read().decode("utf-8", errors="replace")
+
+            if not text.strip():
+                raise ValueError("Upload or paste a pzserver.ini first.")
+
+            settings = parse_pzserver_ini(text)
+            if not settings:
+                raise ValueError("No settings found (expected KEY=VALUE lines).")
+
+            return render_template_string(
+                SERVER_HTML,
+                settings=settings,
+                error=None,
+                server_ini_text=text,
+                loaded_defaults={s.key: s.value for s in settings},
+            )
+        except Exception as exc:
+            return (
+                render_template_string(
+                    SERVER_HTML,
+                    settings=None,
+                    error=str(exc),
+                    server_ini_text=request.form.get("server_ini_text", "") or "",
+                    loaded_defaults={},
+                ),
+                400,
+            )
+
+    @app.post("/server/save")
+    def server_save():
+        text = request.form.get("server_ini_text", "") or ""
+        keys = request.form.getlist("key")
+        updates: dict[str, str] = {}
+        for k in keys:
+            updates[k] = request.form.get(f"val_{k}", "")
+        updated = apply_pzserver_ini_edits(text, updates)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ini")
+        tmp.write(updated.encode("utf-8", errors="replace"))
+        tmp.close()
+        return send_file(tmp.name, as_attachment=True, download_name="pzserver.ini")
+
+    @app.get("/server/template")
+    def server_template():
+        try:
+            with importlib_resources.files("pz_modsmith").joinpath("templates/server/pzserver.ini").open(
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as f:
+                text = f.read()
+            settings = parse_pzserver_ini(text)
+            return render_template_string(
+                SERVER_HTML,
+                settings=settings,
+                error=None,
+                server_ini_text=text,
+                loaded_defaults={s.key: s.value for s in settings},
+            )
+        except Exception as exc:
+            return (
+                render_template_string(
+                    SERVER_HTML,
+                    settings=None,
+                    error=f"Could not load template: {exc}",
+                    server_ini_text="",
+                    loaded_defaults={},
+                ),
+                500,
+            )
+
+    @app.get("/sandbox")
+    def sandbox_get():
+        return render_template_string(
+            SANDBOX_HTML,
+            settings=None,
+            error=None,
+            sandbox_text="",
+            loaded_defaults={},
+        )
+
+    @app.post("/sandbox")
+    def sandbox_post():
+        try:
+            pasted_text = request.form.get("sandbox_text", "") or ""
+            uploaded = request.files.get("sandbox_file")
+            text = pasted_text
+            if uploaded and uploaded.filename:
+                text = uploaded.read().decode("utf-8", errors="replace")
+            if not text.strip():
+                raise ValueError("Upload or paste a pzserver_SandboxVars.lua first.")
+
+            settings = parse_sandbox_vars_lua(text)
+            if not settings:
+                raise ValueError("No SandboxVars settings found (expected `SandboxVars = { ... }`).")
+
+            return render_template_string(
+                SANDBOX_HTML,
+                settings=settings,
+                error=None,
+                sandbox_text=text,
+                loaded_defaults={s.key: s.value_raw for s in settings},
+            )
+        except Exception as exc:
+            return (
+                render_template_string(
+                    SANDBOX_HTML,
+                    settings=None,
+                    error=str(exc),
+                    sandbox_text=request.form.get("sandbox_text", "") or "",
+                    loaded_defaults={},
+                ),
+                400,
+            )
+
+    @app.post("/sandbox/save")
+    def sandbox_save():
+        text = request.form.get("sandbox_text", "") or ""
+        keys = request.form.getlist("key")
+        updates: dict[str, str] = {}
+        for k in keys:
+            updates[k] = request.form.get(f"val_{k}", "")
+        updated = apply_sandbox_vars_edits(text, updates)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".lua")
+        tmp.write(updated.encode("utf-8", errors="replace"))
+        tmp.close()
+        return send_file(tmp.name, as_attachment=True, download_name="pzserver_SandboxVars.lua")
+
+    @app.get("/sandbox/template")
+    def sandbox_template():
+        try:
+            with importlib_resources.files("pz_modsmith").joinpath("templates/server/pzserver_SandboxVars.lua").open(
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as f:
+                text = f.read()
+            settings = parse_sandbox_vars_lua(text)
+            return render_template_string(
+                SANDBOX_HTML,
+                settings=settings,
+                error=None,
+                sandbox_text=text,
+                loaded_defaults={s.key: s.value_raw for s in settings},
+            )
+        except Exception as exc:
+            return (
+                render_template_string(
+                    SANDBOX_HTML,
+                    settings=None,
+                    error=f"Could not load template: {exc}",
+                    sandbox_text="",
+                    loaded_defaults={},
+                ),
+                500,
+            )
 
     @app.post("/analyze")
     def analyze_route():
