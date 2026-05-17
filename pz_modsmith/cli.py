@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .constants import DEFAULT_PORT
@@ -14,7 +15,7 @@ from .analysis import analyze, apply_selection
 from .models import AnalysisResult
 from .reports import write_reports
 from .web import run_app, run_web
-from .steam_api import expand_workshop_ids_with_required_items
+from .steam_api import expand_workshop_ids_with_collections_and_required_items
 
 
 def make_cli_result(args: argparse.Namespace) -> AnalysisResult:
@@ -39,9 +40,15 @@ def make_cli_result(args: argparse.Namespace) -> AnalysisResult:
             raise SystemExit("No Workshop IDs found.")
 
     if getattr(args, "fetch_steam_deps", False) and workshop_ids:
-        workshop_ids = expand_workshop_ids_with_required_items(
+        steam_api_key = (
+            getattr(args, "steam_api_key", None)
+            or os.environ.get("PZ_MODSMITH_STEAM_API_KEY")
+            or os.environ.get("STEAM_WEB_API_KEY")
+        )
+        workshop_ids = expand_workshop_ids_with_collections_and_required_items(
             workshop_ids,
             max_depth=getattr(args, "deps_depth", 2),
+            api_key=steam_api_key,
         )
 
     return analyze(
@@ -76,6 +83,12 @@ def main() -> None:
         dest="fetch_steam_deps",
         action="store_true",
         help='Fetch Steam Workshop "required items" (online) and include them',
+    )
+    parser.add_argument(
+        "--steam-api-key",
+        dest="steam_api_key",
+        default=None,
+        help="Steam Web API key (optional; also read from PZ_MODSMITH_STEAM_API_KEY/STEAM_WEB_API_KEY)",
     )
     parser.add_argument(
         "--deps-depth",
