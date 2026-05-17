@@ -22,6 +22,22 @@ class ConfigSetting:
     default: str | None = None
 
 
+def get_first_ini_value(text: str, key: str) -> str | None:
+    """Return the first value for KEY=VALUE in an INI-ish file (ignores commented lines)."""
+    target = key.strip()
+    if not target:
+        return None
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip("\r")
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        if k.strip() == target:
+            return v.strip()
+    return None
+
+
 def apply_pzserver_ini_edits(text: str, updates: dict[str, str]) -> str:
     """Apply key->value edits to an INI text while preserving comments and ordering.
 
@@ -32,6 +48,7 @@ def apply_pzserver_ini_edits(text: str, updates: dict[str, str]) -> str:
         return text
 
     out_lines: list[str] = []
+    seen_keys: set[str] = set()
     for raw_line in text.splitlines(keepends=False):
         line = raw_line.rstrip("\r")
         stripped = line.lstrip()
@@ -40,11 +57,22 @@ def apply_pzserver_ini_edits(text: str, updates: dict[str, str]) -> str:
             continue
         key, sep, value = line.partition("=")
         key_stripped = key.strip()
+        if key_stripped:
+            seen_keys.add(key_stripped)
         if key_stripped in updates:
             new_value = updates[key_stripped]
             out_lines.append(f"{key_stripped}{sep}{new_value}")
         else:
             out_lines.append(line)
+
+    # Append missing keys at the end (common when server ini lacks WorkshopItems=).
+    missing = [k for k in updates.keys() if k not in seen_keys]
+    if missing:
+        if out_lines and out_lines[-1].strip():
+            out_lines.append("")
+        for k in missing:
+            out_lines.append(f"{k}={updates[k]}")
+
     return "\n".join(out_lines) + ("\n" if text.endswith("\n") else "")
 
 

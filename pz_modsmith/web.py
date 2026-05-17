@@ -20,7 +20,7 @@ from .analysis import analyze, apply_selection
 from .serialization import result_to_dict, dict_to_result
 from .reports import zip_reports
 from .steam_api import expand_workshop_ids_with_required_items
-from .server_ini import parse_pzserver_ini, apply_pzserver_ini_edits
+from .server_ini import parse_pzserver_ini, apply_pzserver_ini_edits, get_first_ini_value
 from .sandbox_lua import parse_sandbox_vars_lua, apply_sandbox_vars_edits
 
 
@@ -153,6 +153,10 @@ INDEX_HTML = r"""
       <input type="text" name="workshop_path" value="{{ workshop_path }}">
       <p class="muted tiny">Usually something like <code>/mnt/storage/SteamLibrary/steamapps/workshop/content/108600</code>.</p>
 
+      <label>Optional: load your current <code>pzserver.ini</code></label>
+      <input type="file" name="server_ini_file" accept=".ini,.txt">
+      <p class="muted tiny">If provided, Modsmith will use <code>WorkshopItems=</code> (preferred) or extract Workshop IDs from the INI. It will also offer an updated INI download on the results page.</p>
+
       <label>Upload console.txt</label>
       <input type="file" name="console_file" accept=".txt,.log">
 
@@ -211,6 +215,7 @@ INDEX_HTML = r"""
 
     <form method="post" action="/generate">
       <input type="hidden" name="state" value="{{ state_json }}">
+      <input type="hidden" name="server_ini_text" value="{{ server_ini_text | e }}">
       <section class="card">
         <h2>Review multi-ID Workshop items</h2>
         <p class="muted">Selections marked +confirmed-from-log came from active runtime mod-load lines, so they are much stronger than guesses. Anything marked B41, SP, legacy, disable, no MP, patch, or optional still deserves side-eye.</p>
@@ -595,6 +600,18 @@ RESULT_HTML = r"""
     <pre id="mods">{{ result.mods_line }}</pre>
   </section>
 
+  {% if updated_ini %}
+  <section class="card">
+    <h2>Updated pzserver.ini</h2>
+    <p class="muted">Includes refreshed <code>WorkshopItems=</code> and <code>Mods=</code> based on your selections.</p>
+    <form method="post" action="/download-ini">
+      <input type="hidden" name="updated_ini" value="{{ updated_ini }}">
+      <button type="submit">Download pzserver.ini</button>
+    </form>
+    <pre>{{ updated_ini }}</pre>
+  </section>
+  {% endif %}
+
   <section class="card">
     <form method="post" action="/download-zip">
       <input type="hidden" name="state" value="{{ state_json }}">
@@ -667,6 +684,7 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
             result=None,
             error=None,
             state_json="",
+            server_ini_text="",
         )
 
     @app.get("/server")
@@ -847,6 +865,8 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
         workshop_path_raw = request.form.get("workshop_path", "").strip()
         pasted_text = request.form.get("pasted_text", "")
         uploaded = request.files.get("console_file")
+        server_ini_file = request.files.get("server_ini_file")
+        server_ini_text = ""
 
         try:
             workshop_path = expand_path(workshop_path_raw)
@@ -856,6 +876,18 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
             text = pasted_text or ""
             if uploaded and uploaded.filename:
                 text += "\n" + uploaded.read().decode("utf-8", errors="replace")
+
+            if server_ini_file and server_ini_file.filename:
+                server_ini_text = server_ini_file.read().decode("utf-8", errors="replace")
+                # If user didn't paste anything, prefer WorkshopItems= from the INI.
+                if not text.strip():
+                    ini_ws = get_first_ini_value(server_ini_text, "WorkshopItems")
+                    if ini_ws:
+                        text = ini_ws
+                    else:
+                        # Fallback: use INI text (may be noisy), but still lets users proceed
+                        # if they pasted Workshop IDs elsewhere in the file.
+                        text = server_ini_text
 
             if not text.strip():
                 raise ValueError("Paste a console log / Workshop IDs or upload console.txt.")
@@ -891,6 +923,7 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
                 result=result,
                 error=None,
                 state_json=state_json,
+                server_ini_text=server_ini_text,
             )
         except Exception as exc:
             return render_template_string(
@@ -899,6 +932,7 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
                 result=None,
                 error=str(exc),
                 state_json="",
+                server_ini_text=server_ini_text,
             ), 400
 
     @app.post("/generate")
@@ -910,7 +944,30 @@ def run_web(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
             selected[item.workshop_id] = [v for v in request.form.getlist(f"selected_{item.workshop_id}") if v.strip()]
         apply_selection(result, selected)
         state_json = json.dumps(result_to_dict(result))
-        return render_template_string(RESULT_HTML, result=result, state_json=state_json)
+        server_ini_text = request.form.get("server_ini_text", "") or ""
+        updated_ini = ""
+        if server_ini_text.strip():
+            updates = {
+                "WorkshopItems": ";".join(result.workshop_ids),
+                "Mods": ";".join(result.selected_mod_ids),
+            }
+            updated_ini = apply_pzserver_ini_edits(server_ini_text, updates)
+        return render_template_string(
+            RESULT_HTML,
+            result=result,
+            state_json=state_json,
+            updated_ini=updated_ini,
+        )
+
+    @app.post("/download-ini")
+    def download_ini_route():
+        text = request.form.get("updated_ini", "") or ""
+        if not text.strip():
+            return ("Missing INI text.", 400)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ini")
+        tmp.write(text.encode("utf-8", errors="replace"))
+        tmp.close()
+        return send_file(tmp.name, as_attachment=True, download_name="pzserver.ini")
 
     @app.post("/download-zip")
     def download_zip_route():

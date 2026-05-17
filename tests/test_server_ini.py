@@ -1,6 +1,6 @@
 import unittest
 
-from pz_modsmith.server_ini import parse_pzserver_ini
+from pz_modsmith.server_ini import parse_pzserver_ini, apply_pzserver_ini_edits, get_first_ini_value
 from pz_modsmith.sandbox_lua import parse_sandbox_vars_lua
 
 
@@ -40,6 +40,16 @@ class TestServerIni(unittest.TestCase):
         s = settings[0]
         self.assertEqual(s.default_raw, "July")
         self.assertEqual(s.default_value_raw, "7")
+
+    def test_get_first_ini_value(self) -> None:
+        text = "# c\nMods=A;B\nMods=C\n"
+        self.assertEqual(get_first_ini_value(text, "Mods"), "A;B")
+
+    def test_apply_appends_missing_keys(self) -> None:
+        text = "PVP=true\n"
+        out = apply_pzserver_ini_edits(text, {"WorkshopItems": "1;2", "Mods": "A;B"})
+        self.assertIn("WorkshopItems=1;2", out)
+        self.assertIn("Mods=A;B", out)
 
 
 if __name__ == "__main__":
