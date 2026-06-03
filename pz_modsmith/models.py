@@ -61,6 +61,8 @@ class AnalysisResult:
     workshop_path: str
     active_mod_ids: list[str]
     diagnostics: list[DiagnosticFinding] = field(default_factory=list)
+    inferred_from_active_mod_ids: bool = False
+    unmatched_active_mod_ids: list[str] = field(default_factory=list)
 
     @property
     def selected_mod_ids(self) -> list[str]:

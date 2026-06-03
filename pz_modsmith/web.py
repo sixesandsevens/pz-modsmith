@@ -205,11 +205,24 @@ INDEX_HTML = r"""
     </form>
   </section>
 
-  {% if result %}
-    <section class="card">
-      <div class="grid">
-        <div class="stat"><strong>{{ result.workshop_ids|length }}</strong><span class="muted">Workshop IDs</span></div>
-        <div class="stat"><strong>{{ result.single_count }}</strong><span class="muted">Single-ID items</span></div>
+	  {% if result %}
+	    {% if result.inferred_from_active_mod_ids and result.unmatched_active_mod_ids %}
+	    <section class="card">
+	      <span class="pill warn">Heads up</span>
+	      <strong>Only {{ result.workshop_ids|length }} Workshop IDs could be inferred from {{ result.active_mod_ids|length }} active Mod IDs.</strong>
+	      <div class="muted tiny" style="margin-top:6px;">
+	        This usually means your <code>Workshop content path</code> doesn’t point at the same Steam library where the mods are downloaded, or the mods aren’t downloaded yet.
+	      </div>
+	      <details style="margin-top:10px;">
+	        <summary class="muted tiny">Show unmatched active Mod IDs ({{ result.unmatched_active_mod_ids|length }})</summary>
+	        <pre class="tiny">{{ result.unmatched_active_mod_ids | join('\n') }}</pre>
+	      </details>
+	    </section>
+	    {% endif %}
+	    <section class="card">
+	      <div class="grid">
+	        <div class="stat"><strong>{{ result.workshop_ids|length }}</strong><span class="muted">Workshop IDs</span></div>
+	        <div class="stat"><strong>{{ result.single_count }}</strong><span class="muted">Single-ID items</span></div>
         <div class="stat"><strong>{{ result.multi_count }}</strong><span class="muted">Need review</span></div>
         <div class="stat"><strong>{{ result.missing_count }}</strong><span class="muted">Missing</span></div>
         <div class="stat"><strong>{{ result.active_mod_ids|length }}</strong><span class="muted">Active Mod IDs from log</span></div>

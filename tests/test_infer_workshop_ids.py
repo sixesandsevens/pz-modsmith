@@ -21,8 +21,26 @@ class TestInferWorkshopIds(unittest.TestCase):
             result = analyze([], workshop_path, active_mod_ids=["FooMod"], console_text="LOG : Mod > loading FooMod")
             self.assertEqual(result.workshop_ids, ["1111111111"])
             self.assertEqual(result.missing_ids, [])
+            self.assertTrue(result.inferred_from_active_mod_ids)
+            self.assertEqual(result.unmatched_active_mod_ids, [])
+
+    def test_merges_inferred_workshop_ids_with_provided_ids(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workshop_path = Path(tmp)
+
+            item_a = workshop_path / "1111111111"
+            item_a.mkdir(parents=True)
+            (item_a / "mod.info").write_text("id=FooMod\nname=Foo\n", encoding="utf-8")
+
+            result = analyze(
+                ["9999999999"],
+                workshop_path,
+                active_mod_ids=["FooMod"],
+                console_text="LOG : Mod > loading FooMod",
+            )
+            self.assertEqual(result.workshop_ids, ["9999999999", "1111111111"])
+            self.assertTrue(result.inferred_from_active_mod_ids)
 
 
 if __name__ == '__main__':
     unittest.main()
-

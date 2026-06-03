@@ -16,6 +16,8 @@ def result_to_dict(result: AnalysisResult) -> dict:
         "multi_count": result.multi_count,
         "missing_count": result.missing_count,
         "active_mod_ids": result.active_mod_ids,
+        "inferred_from_active_mod_ids": result.inferred_from_active_mod_ids,
+        "unmatched_active_mod_ids": result.unmatched_active_mod_ids,
         "items": [asdict(item) for item in result.items],
         "diagnostics": [asdict(f) for f in result.diagnostics],
     }
@@ -72,4 +74,6 @@ def dict_to_result(data: dict) -> AnalysisResult:
         workshop_path=data.get("workshop_path", ""),
         active_mod_ids=data.get("active_mod_ids", []),
         diagnostics=diagnostics,
+        inferred_from_active_mod_ids=bool(data.get("inferred_from_active_mod_ids", False)),
+        unmatched_active_mod_ids=data.get("unmatched_active_mod_ids", []),
     )

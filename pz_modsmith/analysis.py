@@ -99,8 +99,17 @@ def analyze(
     prefer_highest_version: bool = False,
 ) -> AnalysisResult:
     active_mod_ids = active_mod_ids or []
-    if not workshop_ids and active_mod_ids:
-        workshop_ids = infer_workshop_ids_from_active_mod_ids(workshop_path, active_mod_ids)
+    inferred_from_active_mod_ids = False
+    unmatched_active_mod_ids: list[str] = []
+    if active_mod_ids:
+        inferred_ids, unmatched_active_mod_ids = infer_workshop_ids_from_active_mod_ids_detailed(workshop_path, active_mod_ids)
+        if inferred_ids:
+            inferred_from_active_mod_ids = True
+            workshop_ids = dedupe_keep_order([*workshop_ids, *inferred_ids])
+        elif not workshop_ids:
+            # Keep legacy behavior: if no workshop ids were provided and inference
+            # found nothing, still mark inference as attempted.
+            inferred_from_active_mod_ids = True
 
     items: list[WorkshopItem] = []
     missing_ids: list[str] = []
@@ -199,10 +208,19 @@ def analyze(
         workshop_path=str(workshop_path),
         active_mod_ids=active_mod_ids,
         diagnostics=diagnostics,
+        inferred_from_active_mod_ids=inferred_from_active_mod_ids,
+        unmatched_active_mod_ids=unmatched_active_mod_ids,
     )
 
 
 def infer_workshop_ids_from_active_mod_ids(workshop_path: Path, active_mod_ids: list[str]) -> list[str]:
+    found, _unmatched = infer_workshop_ids_from_active_mod_ids_detailed(workshop_path, active_mod_ids)
+    return found
+
+
+def infer_workshop_ids_from_active_mod_ids_detailed(
+    workshop_path: Path, active_mod_ids: list[str]
+) -> tuple[list[str], list[str]]:
     """Infer Workshop item IDs by scanning local downloads for active Mod IDs.
 
     This is a fallback for console logs that include many active mod IDs but do
@@ -211,7 +229,7 @@ def infer_workshop_ids_from_active_mod_ids(workshop_path: Path, active_mod_ids: 
     """
     target_keys = {_normalize_mod_id(mid) for mid in active_mod_ids if _normalize_mod_id(mid)}
     if not target_keys:
-        return []
+        return ([], [])
 
     found_workshop_ids: list[str] = []
     found_keys: set[str] = set()
@@ -219,7 +237,7 @@ def infer_workshop_ids_from_active_mod_ids(workshop_path: Path, active_mod_ids: 
     try:
         children = list(workshop_path.iterdir())
     except OSError:
-        return []
+        return ([], list(active_mod_ids))
 
     for item_dir in children:
         if not item_dir.is_dir():
@@ -232,15 +250,24 @@ def infer_workshop_ids_from_active_mod_ids(workshop_path: Path, active_mod_ids: 
             info = parse_mod_info_file(mod_info_path, workshop_id)
             if not info:
                 continue
-            key = _normalize_mod_id(info.mod_id)
-            if key in target_keys:
+            candidate_keys = {_normalize_mod_id(info.mod_id)}
+            if info.name:
+                candidate_keys.add(_normalize_mod_id(info.name))
+            hit = next((k for k in candidate_keys if k in target_keys), None)
+            if hit:
                 if workshop_id not in found_workshop_ids:
                     found_workshop_ids.append(workshop_id)
-                found_keys.add(key)
+                found_keys.add(hit)
                 if len(found_keys) >= len(target_keys):
-                    return found_workshop_ids
+                    unmatched = [
+                        mid for mid in active_mod_ids if _normalize_mod_id(mid) and _normalize_mod_id(mid) not in found_keys
+                    ]
+                    return (found_workshop_ids, unmatched)
 
-    return found_workshop_ids
+    unmatched = [
+        mid for mid in active_mod_ids if _normalize_mod_id(mid) and _normalize_mod_id(mid) not in found_keys
+    ]
+    return (found_workshop_ids, unmatched)
 
 
 def apply_selection(result: AnalysisResult, selected: dict[str, list[str]]) -> AnalysisResult:
